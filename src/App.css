@@ -528,6 +528,50 @@ body {
   }
 }
 
+.crash-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 15vh;
+  pointer-events: none;
+  z-index: 2000;
+}
+
+.crash-banner {
+  background: #d32f2f;
+  color: white;
+  font-family: 'Architects Daughter', cursive;
+  font-size: 5rem;
+  font-weight: bold;
+  padding: 1rem 4rem;
+  border: 4px solid var(--ink-color);
+  transform: rotate(-3deg);
+  box-shadow: 10px 10px 0px rgba(0, 0, 0, 0.2);
+  animation: crash-bounce 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  text-shadow: 2px 2px 0px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes crash-bounce {
+  0% {
+    transform: translateY(-200px) rotate(-10deg);
+    opacity: 0;
+  }
+
+  70% {
+    transform: translateY(20px) rotate(2deg);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateY(0) rotate(-3deg);
+  }
+}
+
 .dpad-container {
   display: flex;
   flex-direction: column;

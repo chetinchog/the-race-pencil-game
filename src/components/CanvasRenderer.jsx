@@ -11,7 +11,8 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
         playerPositions: {}, // Smooth positions for animation
         lastTime: 0,
         isInitialLoad: true,
-        isFollowing: true
+        isFollowing: true,
+        countdown: countdown // Store initial countdown
     });
 
     const [cellSize, setCellSize] = useState(40);
@@ -109,6 +110,11 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
         };
     }, []);
 
+    // Keep stateRef updated with latest props for the animation loop
+    useEffect(() => {
+        stateRef.current.countdown = countdown;
+    }, [countdown]);
+
     useEffect(() => {
         const render = (time) => {
             const dt = (time - stateRef.current.lastTime) / 1000;
@@ -124,8 +130,9 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
 
             const cam = stateRef.current.camera;
             const activePlayer = players[activePlayerIndex];
-            const isCountingDown = typeof countdown === 'number';
-            const isGo = countdown === 'GO';
+            const currentCountdown = stateRef.current.countdown;
+            const isCountingDown = typeof currentCountdown === 'number';
+            const isGo = currentCountdown === 'GO';
 
             // 1. Update Camera Position (Lerping)
             if (isCountingDown) {
@@ -147,7 +154,28 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
 
                 const targetCellSize = 40;
 
-                const pos = stateRef.current.playerPositions[activePlayer?.id] || activePlayer?.pos || { x: 0, y: 0 };
+                // Determine who to follow:
+                // 1. If a player is currently animating (moving), follow them.
+                // 2. Otherwise receive activePlayer.
+                let targetPlayer = activePlayer;
+
+                // Check for moving players (distance > 0.5 pixels)
+                // We prioritize the player who was just active (usually the one moving)
+                // But simplified: check all, find first moving.
+                for (const p of players) {
+                    const vPos = stateRef.current.playerPositions[p.id];
+                    if (vPos) {
+                        const dx = p.pos.x - vPos.x;
+                        const dy = p.pos.y - vPos.y;
+                        const distSq = dx * dx + dy * dy;
+                        if (distSq > 0.01) { // 0.1 * 0.1 = 0.01 (0.1 grid unit = 4 pixels)
+                            targetPlayer = p;
+                            break;
+                        }
+                    }
+                }
+
+                const pos = stateRef.current.playerPositions[targetPlayer?.id] || targetPlayer?.pos || { x: 0, y: 0 };
                 const px = pos.x * targetCellSize + targetCellSize / 2;
                 const py = pos.y * targetCellSize + targetCellSize / 2;
 
@@ -162,13 +190,13 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
                 const dir = activePlayer?.dir || { x: 0, y: -1 };
                 const speed = activePlayer?.speed || 0;
 
-                // 40% rule: 0.5 +/- 0.1 = 0.6 (60% from front, 40% from back)
-                const targetScreenX = (0.5 - dir.x * 0.10);
-                const targetScreenY = (0.5 - dir.y * 0.10);
+                // Center the player exactly in the middle of the screen
+                const targetScreenX = 0.5;
+                const targetScreenY = 0.5;
 
-                // Slightly more lookahead to compensate for closer back edge
-                const targetLookX = dir.x * speed * targetCellSize * 0.9;
-                const targetLookY = dir.y * speed * targetCellSize * 0.9;
+                // Remove lookahead to keep player centered
+                const targetLookX = 0;
+                const targetLookY = 0;
 
                 st.screenX += (targetScreenX - st.screenX) * 2 * dt;
                 st.screenY += (targetScreenY - st.screenY) * 2 * dt;
@@ -245,8 +273,8 @@ const CanvasRenderer = ({ track, players, activePlayerIndex, multiplayerMode, my
                     stateRef.current.playerPositions[player.id] = { x: player.pos.x, y: player.pos.y };
                 }
                 const pos = stateRef.current.playerPositions[player.id];
-                pos.x += (player.pos.x - pos.x) * 10 * dt;
-                pos.y += (player.pos.y - pos.y) * 10 * dt;
+                pos.x += (player.pos.x - pos.x) * 4 * dt;
+                pos.y += (player.pos.y - pos.y) * 4 * dt;
 
                 const cpx = pos.x * gridCell + gridCell / 2;
                 const cpy = pos.y * gridCell + gridCell / 2;

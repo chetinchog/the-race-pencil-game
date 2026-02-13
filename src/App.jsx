@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GameEngine, ACTIONS, DIRECTIONS } from './logic/GameEngine';
 import { generateCircuit } from './logic/CircuitGenerator';
 import CanvasRenderer from './components/CanvasRenderer';
@@ -55,6 +55,8 @@ function App() {
   const [gameLaps, setGameLaps] = useState(1);
   const [gameComplexity, setGameComplexity] = useState(1);
   const [countdown, setCountdown] = useState(null); // null, 3, 2, 1, 'GO'
+  const [crashNotification, setCrashNotification] = useState(null);
+  const lastCrashedIdRef = useRef(null);
 
   useEffect(() => {
     localStorage.setItem('racePlayerNames', JSON.stringify(playerNames));
@@ -134,7 +136,12 @@ function App() {
         if (prev === 1) return 'GO';
         if (prev === 'GO') {
           clearInterval(timer);
-          setTimeout(() => setCountdown(null), 1200); // 1.2s to see GO
+          // Stay for 1s (the interval duration we just waited), then clear.
+          // Since we are AT the 1s mark (interval fired), we clear immediately to match "1 second".
+          // If we want it to stay for 1 second TOTAL, and the interval is 1s...
+          // The 'GO' triggered at T=0. This interval is T=1.
+          // So it has been visible for 1s. We can clear it now.
+          setCountdown(null);
           return 'GO';
         }
         return prev;
@@ -367,6 +374,14 @@ function App() {
       path: actualPath
     };
 
+    // Trigger Crash Notification directly on event
+    if (isCrashed) {
+      setTimeout(() => {
+        setCrashNotification("¡CRASHED!");
+        setTimeout(() => setCrashNotification(null), 2000);
+      }, 500);
+    }
+
     const newPlayers = [...players];
     newPlayers[currentPlayerIndex] = updatedPlayer;
 
@@ -380,15 +395,40 @@ function App() {
         newStatus = 'FINISH';
       }
 
+      // UPDATE 1: Always update the player's position first
       updateDoc(doc(db, 'rooms', roomCode), {
         players: newPlayers,
-        currentPlayerIndex: nextIdx,
-        status: newStatus,
+        status: newStatus, // If finished, this might end it
         lastUpdated: Date.now()
       });
+
+      // UPDATE 2: Handle Turn Change (Delayed if Crashed)
+      if (isCrashed) {
+        // Wait for Banner (500ms anim + 2000ms banner = 2500ms)
+        setTimeout(() => {
+          updateDoc(doc(db, 'rooms', roomCode), {
+            currentPlayerIndex: nextIdx,
+            lastUpdated: Date.now()
+          });
+        }, 2500);
+      } else if (!allFinished && newStatus !== 'FINISH') {
+        // Immediate turn change if not crashed
+        updateDoc(doc(db, 'rooms', roomCode), {
+          currentPlayerIndex: nextIdx
+        });
+      }
+
     } else {
       setPlayers(newPlayers);
-      nextTurn(newPlayers);
+
+      if (isCrashed) {
+        // Wait for Banner (500ms anim + 2000ms banner = 2500ms)
+        setTimeout(() => {
+          nextTurn(newPlayers);
+        }, 2500);
+      } else {
+        nextTurn(newPlayers);
+      }
     }
   };
 
@@ -421,6 +461,8 @@ function App() {
   const [leaderboard, setLeaderboard] = useState([]);
 
   // ... (inside App component)
+
+  // Detect Crashes for Notification: Removed in favor of direct trigger in movePlayer
 
   const calculateWinner = (currentPlayers) => {
     const finishedPlayers = currentPlayers.filter(p => p.finished);
@@ -676,6 +718,11 @@ function App() {
                 <div className="countdown-number">{countdown}</div>
               </div>
             )}
+            {crashNotification && (
+              <div className="crash-overlay">
+                <div className="crash-banner">{crashNotification}</div>
+              </div>
+            )}
           </div>
 
           <div className="bottom-bar">
@@ -684,8 +731,6 @@ function App() {
               <h3 style={{ color: currentPlayer.color }}>{currentPlayer.name}</h3>
               <div className="stat">Speed: <strong>{currentPlayer.speed} s/t</strong></div>
             </div>
-            {currentPlayer.isCrashed && <div className="crash-alert">CRASHED!</div>}
-
 
             <div className="actions">
               <div className="dpad-container">
