@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { GameEngine, ACTIONS, DIRECTIONS } from './logic/GameEngine';
-import { generateTrack, SPRINT_MAP_1 } from './data/maps';
+import { generateCircuit } from './logic/CircuitGenerator';
 import CanvasRenderer from './components/CanvasRenderer';
 import { db } from './firebase';
 import {
@@ -17,13 +17,25 @@ import './App.css';
 
 
 
+const GAME_VERSION = 'v1.5.0';
 const DEFAULT_NAMES = ['Player 1', 'Player 2', 'Player 3', 'Player 4', 'Player 5', 'Player 6', 'Player 7', 'Player 8'];
 const PLAYER_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#ff9800', '#9c27b0', '#00bcd4', '#795548'];
+
+const SketchyCar = ({ className, style }) => (
+  <svg viewBox="0 0 100 50" className={className} style={{ width: '80px', height: '40px', ...style }} xmlns="http://www.w3.org/2000/svg">
+    <path d="M10,35 L12,32 L80,30 L88,35 L82,43 L15,44 Z" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M35,30 L42,18 L65,18 L72,30" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <path d="M82,30 L82,20 L98,20 L98,30" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+    <circle cx="28" cy="42" r="7" fill="white" stroke="currentColor" strokeWidth="2" />
+    <circle cx="78" cy="42" r="7" fill="white" stroke="currentColor" strokeWidth="2" />
+    <path d="M28,42 L28,35 M78,42 L78,35" stroke="currentColor" strokeWidth="1" />
+  </svg>
+);
 
 function App() {
   const [gameState, setGameState] = useState('MENU'); // MENU, LOBBY, RACING, FINISH
   const [multiplayerMode, setMultiplayerMode] = useState('LOCAL'); // LOCAL, ONLINE
-  const [track, setTrack] = useState(SPRINT_MAP_1);
+  const [track, setTrack] = useState(null);
   const [playerNames, setPlayerNames] = useState(() => {
     const saved = localStorage.getItem('racePlayerNames');
     return saved ? JSON.parse(saved) : DEFAULT_NAMES;
@@ -40,6 +52,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [gamePlayerCount, setGamePlayerCount] = useState(2);
   const [maxPlayers, setMaxPlayers] = useState(4);
+  const [gameLaps, setGameLaps] = useState(1);
+  const [gameComplexity, setGameComplexity] = useState(1);
+  const [countdown, setCountdown] = useState(null); // null, 3, 2, 1, 'GO'
 
   useEffect(() => {
     localStorage.setItem('racePlayerNames', JSON.stringify(playerNames));
@@ -65,49 +80,66 @@ function App() {
 
   const startRace = (playerCount) => {
     setLeaderboard([]);
-    const trackWidth = playerCount + 2;
-    const newTrack = generateTrack(15, 25, trackWidth);
-    setTrack(newTrack);
+    const width = 80;
+    const height = 50;
+    const calculatedTrackWidth = playerCount + 2;
+    const newGrid = generateCircuit(width, height, calculatedTrackWidth, gameComplexity);
+    setTrack(newGrid);
 
-    // Find start line squares
-    const startLine = [];
-    const lastRow = newTrack.length - 1;
-    newTrack[lastRow].forEach((cell, x) => {
-      if (cell === 2) startLine.push(x);
+    // Find spawn squares (2)
+    const spawnPoints = [];
+    newGrid.forEach((row, y) => {
+      row.forEach((cell, x) => {
+        if (cell === 2) spawnPoints.push({ x, y });
+      });
     });
 
-    // Generate indices for start positions (distribute centered)
-    let startIndices = Array.from({ length: playerCount }, (_, i) => {
-      // Center the players on the start line
-      const offset = Math.floor((startLine.length - playerCount) / 2);
-      return offset + i;
-    });
+    // Sort spawns by X to handle centering
+    const sortedSpawns = [...spawnPoints].sort((a, b) => a.x - b.x);
 
-    // Shuffle starting positions to avoid bias
-    startIndices = startIndices.sort(() => Math.random() - 0.5);
+    // Center the players: Pick middle indices
+    const totalSpawns = sortedSpawns.length;
+    const startIdx = Math.floor((totalSpawns - playerCount) / 2);
 
-    const colors = PLAYER_COLORS;
-    const newPlayers = Array.from({ length: playerCount }, (_, i) => {
-      const startX = startLine[startIndices[i]] ?? startLine[0];
-      return {
-        id: i + 1,
-        name: playerNames[i] || `Player ${i + 1}`,
-        color: colors[i] || `#${Math.floor(Math.random() * 16777215).toString(16)}`,
-        pos: { x: startX, y: lastRow },
-        history: [],
-        turns: 0,
-        finished: false,
-        isCrashed: false,
-        speed: 0,
-        dir: DIRECTIONS.UP
-      };
-    });
+    // Assign spawns to players
+    const finalSpawns = sortedSpawns.slice(startIdx, startIdx + playerCount);
+    // If not enough spawns (shouldn't happen with correct trackWidth), fallback to all
+    const activeSpawns = finalSpawns.length === playerCount ? finalSpawns : sortedSpawns.slice(0, playerCount);
 
-    const shuffledPlayers = newPlayers.sort(() => Math.random() - 0.5);
+    const newPlayers = Array.from({ length: playerCount }, (_, i) => ({
+      id: i,
+      name: playerNames[i] || `Player ${i + 1}`,
+      pos: activeSpawns[i] || { x: 5, y: 5 }, // Fallback if activeSpawns is somehow empty
+      color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+      speed: 0,
+      dir: { x: 0, y: -1 },
+      history: [],
+      isCrashed: false,
+      finished: false,
+      lapsCompleted: 0,
+      turns: 0
+    }));
 
-    setPlayers(shuffledPlayers);
+    setPlayers(newPlayers);
     setCurrentPlayerIndex(0);
     setGameState('RACING');
+    runCountdown();
+  };
+
+  const runCountdown = () => {
+    setCountdown(5);
+    const timer = setInterval(() => {
+      setCountdown(prev => {
+        if (typeof prev === 'number' && prev > 1) return prev - 1;
+        if (prev === 1) return 'GO';
+        if (prev === 'GO') {
+          clearInterval(timer);
+          setTimeout(() => setCountdown(null), 1200); // 1.2s to see GO
+          return 'GO';
+        }
+        return prev;
+      });
+    }, 1000);
   };
 
   // Online Logic
@@ -204,20 +236,26 @@ function App() {
     setIsLoading(true);
     try {
       const trackWidth = players.length + 2;
-      const newTrack = generateTrack(15, 25, trackWidth);
+      const newTrack = generateCircuit(30, 40, trackWidth, gameComplexity);
 
-      const startLine = [];
-      newTrack[newTrack.length - 1].forEach((cell, x) => {
-        if (cell === 2) startLine.push(x);
+      const spawnPoints = [];
+      newTrack.forEach((row, y) => {
+        row.forEach((cell, x) => {
+          if (cell === 2) spawnPoints.push({ x, y });
+        });
       });
 
-      // Use available start squares
-      let startIndices = Array.from({ length: players.length }, (_, i) => i + 1);
-      startIndices = startIndices.sort(() => Math.random() - 0.5);
+      const shuffledSpawns = [...spawnPoints].sort(() => Math.random() - 0.5);
 
       const updatedPlayers = players.map((p, i) => ({
         ...p,
-        pos: { x: startLine[startIndices[i]] || startLine[0], y: newTrack.length - 1 }
+        pos: shuffledSpawns[i] || shuffledSpawns[0] || { x: 5, y: 5 },
+        speed: 0,
+        dir: { x: 0, y: -1 },
+        history: [],
+        isCrashed: false,
+        finished: false,
+        lapsCompleted: 0
       })).sort(() => Math.random() - 0.5);
 
       await updateDoc(doc(db, 'rooms', roomCode), {
@@ -225,6 +263,8 @@ function App() {
         track: JSON.stringify(newTrack),
         players: updatedPlayers,
         currentPlayerIndex: 0,
+        maxLaps: gameLaps,
+        complexity: gameComplexity,
         lastUpdated: Date.now()
       });
     } catch (error) {
@@ -245,9 +285,12 @@ function App() {
         setCurrentPlayerIndex(data.currentPlayerIndex);
         if (data.track) setTrack(JSON.parse(data.track));
         if (data.maxPlayers) setMaxPlayers(data.maxPlayers);
+        if (data.maxLaps) setGameLaps(data.maxLaps);
+        if (data.complexity) setGameComplexity(data.complexity);
 
         if (data.status === 'RACING' && gameState !== 'RACING') {
           setGameState('RACING');
+          runCountdown();
         }
         if (data.status === 'FINISH' && gameState !== 'FINISH') {
           calculateWinner(data.players);
@@ -260,6 +303,7 @@ function App() {
   }, [roomCode, gameState]);
 
   const handleAction = (action) => {
+    if (countdown !== null && countdown !== 'GO') return;
     const player = players[currentPlayerIndex];
     if (player.finished) {
       nextTurn();
@@ -280,16 +324,23 @@ function App() {
     let actualPath = [];
     let prevStep = { ...player.pos };
 
+    const targetLaps = multiplayerMode === 'ONLINE' ? gameLaps : gameLaps; // gameLaps is already updated by room data for online
+    let currentLaps = player.lapsCompleted || 0;
+
     // Path includes the squares the car passes through
     for (const step of nextState.path) {
       const cell = track[step.y]?.[step.x];
 
       // Check for finish line first (Highest priority)
       if (cell === 3) {
-        finished = true;
-        finalPos = step;
-        actualPath.push(step);
-        break;
+        // Crossing the line!
+        currentLaps++;
+        if (currentLaps >= targetLaps) {
+          finished = true;
+          finalPos = step;
+          actualPath.push(step);
+          break;
+        }
       }
 
       // Check for crash (Wall or outside map)
@@ -310,8 +361,9 @@ function App() {
       speed: finalSpeed,
       isCrashed: isCrashed,
       finished: finished,
+      lapsCompleted: currentLaps,
       history: [...player.history, player.pos],
-      turns: player.turns + 1,
+      turns: (player.turns || 0) + 1,
       path: actualPath
     };
 
@@ -388,11 +440,13 @@ function App() {
 
   return (
     <div className="app-container">
+      <div className="version-tag">{GAME_VERSION}</div>
       {gameState === 'MENU' && (
         <div className="menu-container">
           <div className="title-group">
-            <span className="title-icon">🏎️</span>
+            <SketchyCar className="title-car-left" />
             <h1 className="sketchy-title">THE RACE</h1>
+            <SketchyCar className="title-car-right" />
             <span className="pencil-subtitle">Pencil game</span>
           </div>
 
@@ -417,9 +471,9 @@ function App() {
             </button>
           </div>
 
-          <div className="menu-card">
+          <div className="menu-card settings-grid">
             <div className="stepper-section">
-              <p>Number of Players:</p>
+              <p>Players:</p>
               <div className="numeric-stepper">
                 <button
                   className="stepper-btn"
@@ -431,6 +485,40 @@ function App() {
                   className="stepper-btn"
                   onClick={() => setGamePlayerCount(Math.min(8, gamePlayerCount + 1))}
                   disabled={gamePlayerCount >= 8}
+                >▲</button>
+              </div>
+            </div>
+
+            <div className="stepper-section">
+              <p>Laps:</p>
+              <div className="numeric-stepper">
+                <button
+                  className="stepper-btn"
+                  onClick={() => setGameLaps(Math.max(1, gameLaps - 1))}
+                  disabled={gameLaps <= 1}
+                >▼</button>
+                <div className="stepper-value">{gameLaps}</div>
+                <button
+                  className="stepper-btn"
+                  onClick={() => setGameLaps(Math.min(10, gameLaps + 1))}
+                  disabled={gameLaps >= 10}
+                >▲</button>
+              </div>
+            </div>
+
+            <div className="stepper-section">
+              <p>Complexity:</p>
+              <div className="numeric-stepper">
+                <button
+                  className="stepper-btn"
+                  onClick={() => setGameComplexity(Math.max(1, gameComplexity - 1))}
+                  disabled={gameComplexity <= 1}
+                >▼</button>
+                <div className="stepper-value">{gameComplexity}</div>
+                <button
+                  className="stepper-btn"
+                  onClick={() => setGameComplexity(Math.min(5, gameComplexity + 1))}
+                  disabled={gameComplexity >= 5}
                 >▲</button>
               </div>
             </div>
@@ -543,6 +631,10 @@ function App() {
                 </div>
               ))}
             </div>
+
+            <div className="lobby-settings-hint" style={{ marginTop: '1rem', opacity: 0.7, fontSize: '0.9rem' }}>
+              <strong>Race Info:</strong> {gameLaps} Laps | Complexity: {gameComplexity}/5
+            </div>
           </div>
 
           <div className="menu-card">
@@ -564,54 +656,63 @@ function App() {
 
       {gameState === 'RACING' && (
         <div className="game-screen">
-          <div className="game-sidebar">
+          <div className="camera-controls">
+            <button className="zoom-btn" id="zoomIn" title="Zoom In">+</button>
+            <button className="zoom-btn" id="zoomOut" title="Zoom Out">-</button>
+            <button className="gps-btn" id="resetCamera" title="Center on Player">🎯</button>
+          </div>
+
+          <div className="game-board-container" id="game-board-container">
+            <CanvasRenderer
+              track={track}
+              players={players}
+              activePlayerIndex={currentPlayerIndex}
+              multiplayerMode={multiplayerMode}
+              myId={myId}
+              countdown={countdown}
+            />
+            {countdown !== null && (
+              <div className="countdown-overlay">
+                <div className="countdown-number">{countdown}</div>
+              </div>
+            )}
+          </div>
+
+          <div className="bottom-bar">
             <div className="player-stats">
-              <div className="turn-number">Turn #{currentPlayer.turns + 1}</div>
+              <div className="turn-number">Turn #{currentPlayer.turns + 1} | Lap {currentPlayer.lapsCompleted + 1} of {gameLaps}</div>
               <h3 style={{ color: currentPlayer.color }}>{currentPlayer.name}</h3>
               <div className="stat">Speed: <strong>{currentPlayer.speed} s/t</strong></div>
-              {currentPlayer.isCrashed && <div className="crash-alert">CRASHED! Speed reset to 0</div>}
             </div>
+            {currentPlayer.isCrashed && <div className="crash-alert">CRASHED!</div>}
+
 
             <div className="actions">
-              <p className="label">Decision</p>
               <div className="dpad-container">
                 <div className="dpad-row">
                   <button onClick={() => handleAction(ACTIONS.SPEED_UP)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn up" title="Speed Up (+1)">▲</button>
                 </div>
                 <div className="dpad-row center">
                   <button onClick={() => handleAction(ACTIONS.TURN_LEFT)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn left" title="Turn Left">◀</button>
-                  <button onClick={() => handleAction(ACTIONS.SPEED_KEEP)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn keep" title="Keep Speed">●</button>
+                  <button onClick={() => handleAction(ACTIONS.SPEED_KEEP)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn keep" title="Keep">●</button>
                   <button onClick={() => handleAction(ACTIONS.TURN_RIGHT)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn right" title="Turn Right">▶</button>
                 </div>
                 <div className="dpad-row">
                   <button onClick={() => handleAction(ACTIONS.SPEED_DOWN)} disabled={(currentPlayer.speed === 0) || (multiplayerMode === 'ONLINE' && currentPlayer.id !== myId)} className="dpad-btn down" title="Speed Down (-1)">▼</button>
                 </div>
               </div>
-              <div className="dpad-labels">
-                <span>Top: Speed Up</span>
-                <span>Middle: Keep Speed</span>
-                <span>Bottom: Speed Down</span>
-              </div>
             </div>
 
             <div className="player-list">
               {players.map(p => (
-                <div key={p.id} className={`player-mini ${p.id === currentPlayer.id ? 'active' : ''}`} style={{ borderLeft: `5px solid ${p.color}` }}>
-                  {p.name} {p.finished ? '(🏁)' : ''}
+                <div key={p.id} className={`player-mini ${p.id === currentPlayer.id ? 'active' : ''}`} style={{ borderBottom: p.id === currentPlayer.id ? `3px solid ${p.color}` : 'none' }}>
+                  <div style={{ color: p.color, fontWeight: 'bold' }}>{p.name} {p.finished ? '🏁' : ''}</div>
                   <div className="mini-speed">S: {p.speed}</div>
                 </div>
               ))}
             </div>
 
-            <button onClick={resetToMenu} className="sketchy-button exit-btn">EXIT TO MENU</button>
-          </div>
-
-          <div className="game-board">
-            <CanvasRenderer
-              track={track}
-              players={players}
-              cellSize={Math.min(30, Math.floor((window.innerHeight - 80) / track.length), Math.floor((window.innerWidth - 350) / track[0].length))}
-            />
+            <button onClick={resetToMenu} className="sketchy-button exit-btn">EXIT</button>
           </div>
         </div>
       )}
