@@ -17,7 +17,7 @@ import './App.css';
 
 
 
-const GAME_VERSION = 'v1.5.0';
+const GAME_VERSION = 'v1.7.1';
 const DEFAULT_NAMES = ['Player 1', 'Player 2', 'Player 3', 'Player 4', 'Player 5', 'Player 6', 'Player 7', 'Player 8'];
 const PLAYER_COLORS = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#ff9800', '#9c27b0', '#00bcd4', '#795548'];
 
@@ -32,10 +32,52 @@ const SketchyCar = ({ className, style }) => (
   </svg>
 );
 
+const SunIcon = () => (
+  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="5"></circle>
+    <line x1="12" y1="1" x2="12" y2="3"></line>
+    <line x1="12" y1="21" x2="12" y2="23"></line>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+    <line x1="1" y1="12" x2="3" y2="12"></line>
+    <line x1="21" y1="12" x2="23" y2="12"></line>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+  </svg>
+);
+
+const MoonIcon = () => (
+  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+  </svg>
+);
+
+const GPSIcon = () => (
+  <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"></circle>
+    <line x1="12" y1="8" x2="12" y2="16"></line>
+    <line x1="8" y1="12" x2="16" y2="12"></line>
+    <circle cx="12" cy="12" r="3"></circle>
+  </svg>
+);
+
 function App() {
   const [gameState, setGameState] = useState('MENU'); // MENU, LOBBY, RACING, FINISH
   const [multiplayerMode, setMultiplayerMode] = useState('LOCAL'); // LOCAL, ONLINE
   const [track, setTrack] = useState(null);
+  const [theme, setTheme] = useState(() => localStorage.getItem('raceTheme') || 'light');
+
+  // Delayed UI state for smooth turns
+
+  useEffect(() => {
+    document.body.setAttribute('data-theme', theme);
+    localStorage.setItem('raceTheme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  };
+
   const [playerNames, setPlayerNames] = useState(() => {
     const saved = localStorage.getItem('racePlayerNames');
     return saved ? JSON.parse(saved) : DEFAULT_NAMES;
@@ -66,11 +108,38 @@ function App() {
     localStorage.setItem('raceOnlineName', onlineName);
   }, [onlineName]);
 
+  // Delayed UI state for smooth turns
+  const [displayedPlayerIndex, setDisplayedPlayerIndex] = useState(0);
+  const [isProcessingTurn, setIsProcessingTurn] = useState(false);
+
+  useEffect(() => {
+    // If it's the first load or invalid, set immediately
+    if (displayedPlayerIndex === null) {
+      setDisplayedPlayerIndex(currentPlayerIndex);
+      setIsProcessingTurn(false);
+      return;
+    }
+
+    // Delay the UI update to match camera pan (approx 1.5s)
+    const timer = setTimeout(() => {
+      setDisplayedPlayerIndex(currentPlayerIndex);
+      setIsProcessingTurn(false);
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [currentPlayerIndex]);
+
+  // Derived state for UI rendering
+  // If we are in the middle of a reset or init, fallback to current
+  const uiPlayerIndex = (players && players[displayedPlayerIndex]) ? displayedPlayerIndex : currentPlayerIndex;
+  const uiPlayer = players[uiPlayerIndex];
+
   const updatePlayerName = (index, name) => {
     const newNames = [...playerNames];
     newNames[index] = name;
     setPlayerNames(newNames);
   };
+
 
   const resetToMenu = () => {
     setRoomCode('');
@@ -311,6 +380,8 @@ function App() {
 
   const handleAction = (action) => {
     if (countdown !== null && countdown !== 'GO') return;
+    if (isProcessingTurn) return; // Prevent double clicks
+
     const player = players[currentPlayerIndex];
     if (player.finished) {
       nextTurn();
@@ -321,6 +392,8 @@ function App() {
     if (multiplayerMode === 'ONLINE' && player.id !== myId) {
       return;
     }
+
+    setIsProcessingTurn(true); // Lock controls
 
     const nextState = GameEngine.movePlayer(player, action);
 
@@ -481,7 +554,10 @@ function App() {
   const currentPlayer = players[currentPlayerIndex];
 
   return (
-    <div className="app-container">
+    <div className={`app-container state-${gameState.toLowerCase()}`}>
+      <button className="theme-toggle" onClick={toggleTheme} title="Toggle Theme">
+        {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+      </button>
       <div className="version-tag">{GAME_VERSION}</div>
       {gameState === 'MENU' && (
         <div className="menu-container">
@@ -701,7 +777,7 @@ function App() {
           <div className="camera-controls">
             <button className="zoom-btn" id="zoomIn" title="Zoom In">+</button>
             <button className="zoom-btn" id="zoomOut" title="Zoom Out">-</button>
-            <button className="gps-btn" id="resetCamera" title="Center on Player">🎯</button>
+            <button className="gps-btn" id="resetCamera" title="Center on Player"><GPSIcon /></button>
           </div>
 
           <div className="game-board-container" id="game-board-container">
@@ -712,6 +788,7 @@ function App() {
               multiplayerMode={multiplayerMode}
               myId={myId}
               countdown={countdown}
+              theme={theme}
             />
             {countdown !== null && (
               <div className="countdown-overlay">
@@ -727,30 +804,30 @@ function App() {
 
           <div className="bottom-bar">
             <div className="player-stats">
-              <div className="turn-number">Turn #{currentPlayer.turns + 1} | Lap {currentPlayer.lapsCompleted + 1} of {gameLaps}</div>
-              <h3 style={{ color: currentPlayer.color }}>{currentPlayer.name}</h3>
-              <div className="stat">Speed: <strong>{currentPlayer.speed} s/t</strong></div>
+              <div className="turn-number">Turn #{uiPlayer ? uiPlayer.turns + 1 : 1} | Lap {uiPlayer ? uiPlayer.lapsCompleted + 1 : 1} of {gameLaps}</div>
+              <h3 style={{ color: uiPlayer ? uiPlayer.color : 'inherit' }}>{uiPlayer ? uiPlayer.name : '...'}</h3>
+              <div className="stat">Speed: <strong>{uiPlayer ? uiPlayer.speed : 0} s/t</strong></div>
             </div>
 
             <div className="actions">
               <div className="dpad-container">
                 <div className="dpad-row">
-                  <button onClick={() => handleAction(ACTIONS.SPEED_UP)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn up" title="Speed Up (+1)">▲</button>
+                  <button onClick={() => handleAction(ACTIONS.SPEED_UP)} disabled={isProcessingTurn || (countdown !== null && countdown !== 'GO') || (multiplayerMode === 'ONLINE' && uiPlayer && uiPlayer.id !== myId)} className="dpad-btn up" title="Speed Up (+1)">▲</button>
                 </div>
                 <div className="dpad-row center">
-                  <button onClick={() => handleAction(ACTIONS.TURN_LEFT)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn left" title="Turn Left">◀</button>
-                  <button onClick={() => handleAction(ACTIONS.SPEED_KEEP)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn keep" title="Keep">●</button>
-                  <button onClick={() => handleAction(ACTIONS.TURN_RIGHT)} disabled={multiplayerMode === 'ONLINE' && currentPlayer.id !== myId} className="dpad-btn right" title="Turn Right">▶</button>
+                  <button onClick={() => handleAction(ACTIONS.TURN_LEFT)} disabled={isProcessingTurn || (countdown !== null && countdown !== 'GO') || (multiplayerMode === 'ONLINE' && uiPlayer && uiPlayer.id !== myId)} className="dpad-btn left" title="Turn Left">◀</button>
+                  <button onClick={() => handleAction(ACTIONS.SPEED_KEEP)} disabled={isProcessingTurn || (countdown !== null && countdown !== 'GO') || (multiplayerMode === 'ONLINE' && uiPlayer && uiPlayer.id !== myId)} className="dpad-btn keep" title="Keep">●</button>
+                  <button onClick={() => handleAction(ACTIONS.TURN_RIGHT)} disabled={isProcessingTurn || (countdown !== null && countdown !== 'GO') || (multiplayerMode === 'ONLINE' && uiPlayer && uiPlayer.id !== myId)} className="dpad-btn right" title="Turn Right">▶</button>
                 </div>
                 <div className="dpad-row">
-                  <button onClick={() => handleAction(ACTIONS.SPEED_DOWN)} disabled={(currentPlayer.speed === 0) || (multiplayerMode === 'ONLINE' && currentPlayer.id !== myId)} className="dpad-btn down" title="Speed Down (-1)">▼</button>
+                  <button onClick={() => handleAction(ACTIONS.SPEED_DOWN)} disabled={isProcessingTurn || (countdown !== null && countdown !== 'GO') || (uiPlayer.speed === 0) || (multiplayerMode === 'ONLINE' && uiPlayer && uiPlayer.id !== myId)} className="dpad-btn down" title="Speed Down (-1)">▼</button>
                 </div>
               </div>
             </div>
 
             <div className="player-list">
               {players.map(p => (
-                <div key={p.id} className={`player-mini ${p.id === currentPlayer.id ? 'active' : ''}`} style={{ borderBottom: p.id === currentPlayer.id ? `3px solid ${p.color}` : 'none' }}>
+                <div key={p.id} className={`player-mini ${uiPlayer && p.id === uiPlayer.id ? 'active' : ''}`} style={{ borderBottom: uiPlayer && p.id === uiPlayer.id ? `3px solid ${p.color}` : 'none' }}>
                   <div style={{ color: p.color, fontWeight: 'bold' }}>{p.name} {p.finished ? '🏁' : ''}</div>
                   <div className="mini-speed">S: {p.speed}</div>
                 </div>
@@ -783,9 +860,10 @@ function App() {
         </div>
       )}
 
+      {/* Fixed UI Elements */}
       <div className="footer-stamp">
         <span className="stamp-main">By iCTG</span>
-        <span className="stamp-sub">Powered by Antigravity</span>
+        <span className="stamp-sub">Powered by Gemini</span>
       </div>
     </div>
   );
